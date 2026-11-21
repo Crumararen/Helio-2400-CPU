@@ -1,5 +1,6 @@
 
 // Man, this thing is a mess. I think it will work now, but like,
+// Update: hahahahahhaha. No. Stale data. I fixed it now I think...
 module lsu	                       (   // do not trust me on that.
 	input             clock,           // Clock signal
 	input             reset,           // Reset signal
@@ -17,7 +18,7 @@ module lsu	                       (   // do not trust me on that.
 	output reg        mem_read,        // Tell the memory controller to read
 	output reg        mem_write,       // Tell the memory controller to write
 	output reg        mem_enable,      // Tell the memory controller to do something
-	output reg        waitfordata  );  // The CLU should not advance the PC on a clock signal if this is raised high
+	output reg        lsu_done     );  // The CLU should not advance the PC on a clock signal if this is raised high
 
 	localparam LSU_NOP   = 4'd0;   // Don't touch anything!! Gonna get yerself killed. Jaeaysus
         localparam LSU_LOAD  = 4'd1;   // Read  a single 8-bit byte at memory address in memaddr_in
@@ -41,13 +42,13 @@ module lsu	                       (   // do not trust me on that.
 		if (reset) begin                       // You try to teach yourself how to do this shit in a week man.
 			half_select <= 0;              // Anyways, back to the program. I won't be using too many comments here
 			cycle_count <= 0;              // Because this part is pretty simple, and I can't make em pretty here TvT
-			waitfordata <= 0;
+			lsu_done    <= 0;
 			first_half  <= 16'h0000;
 
 		end else begin
 			case (lsu_op)
 				LSU_PUSH, LSU_CALL, LSU_POP, LSU_RET: begin
-					waitfordata <= 1;
+					lsu_done <= 0;
 					if (cycle_count == 0) begin
 						half_select <= 0;
 						cycle_count <= 1;
@@ -56,15 +57,20 @@ module lsu	                       (   // do not trust me on that.
 						cycle_count <= 2;
 						if (lsu_op == LSU_POP || lsu_op == LSU_RET)
 							first_half <= data_in[15:0];
+					end else if (cycle_count == 2) begin 
+						intdata_out = {first_half, data_in};
+						regwrite    = 1;
+						lsu_done    = 1;
+						cycle_count = 3;
 					end else begin
 						half_select <= 0;
 						cycle_count <= 0;
-						waitfordata <= 0;
+						lsu_done    <= 1;
 					end
 				end
 
 				LSU_RCHR: begin
-					waitfordata <= 1;
+					lsu_done <= 0;
 					if (cycle_count == 0) begin
 						cycle_count <=1;
 					end else if (cycle_count == 1) begin
@@ -72,14 +78,14 @@ module lsu	                       (   // do not trust me on that.
 						cycle_count <= 2;
 					end else if (cycle_count == 2) begin
 						cycle_count <= 0;
-						waitfordata <= 0;
+						lsu_done    <= 1;
 					end
 				end
 
 				default: begin
 					half_select <= 0;
 					cycle_count <= 0;
-					waitfordata <= 0;
+					lsu_done    <= 1;
 				end
 
 			endcase

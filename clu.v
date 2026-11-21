@@ -3,8 +3,7 @@
 // or whatever they're called, but a 22-to-1 MUX seemed outside the realm
 // of reasonable feasibility for my fantasy CPU's historical context.
 // As a compromise, I thought it might be a good idea to chain 8-to-1
-// MUXes into a 3-to-1 MUX in order to reduce complexity. We only need
-// 22 inputs though, so the third MUX has two pins tied to ground.
+// MUXes into a 3-to-1 MUX in order to reduce complexity.
 module mux8							(
 	input [31:0] in0, in1, in2, in3, in4, in5, in6, in7,
 	input [ 2:0] sel,
@@ -20,6 +19,7 @@ module mux8							(
 			3'd5: out = in5;
 			3'd6: out = in6;
 			3'd7: out = in7;
+			default: out = 32'd0;
 		endcase
 	end
 
@@ -28,7 +28,7 @@ endmodule
 // I have no idea if there's any point to doing any of this on
 // a modern FPGA whatsoever and I may well be deluded to think
 // that this would be an even remotely period-appropriate approach,
-// but, idk. Just didn't feel right to do a full horrid 22-to-1 mux.
+// but, idk. Just didn't feel right to do a full horrid 24-to-1 mux.
 // 0 - 15 : R0-R15
 // 16     : ALU result
 // 17     : LSU intdata_out
@@ -39,7 +39,7 @@ endmodule
 // 22     : Immediate (memdata_in, zero extend)
 // 23     : PC
 module internaldatamux			(
-	input  [31:0] sources [0:21],
+	input  [31:0] sources [0:23],
 	input  [ 4:0] select,
 	output [31:0] out		);
 
@@ -149,7 +149,7 @@ module CLU                           (
 	input wire        reset,        // Reset
 	input wire        interrupt,    // IRQ pin on the CPU must feed into this
 	input wire [15:0] memdata_in,   // Memory data in
-	input wire        waitfordata,  // Waiting on the LSU
+	input wire        lsu_done,     // Waiting on the LSU
 	input wire        mul_done,     // Waiting on the Multiplier
 	input wire        div_done,     // Waiting on the Divider
 	input wire        alu_zero,     // Use ALU to see if zero for JZ/JNZ
@@ -184,8 +184,11 @@ module CLU                           (
 	wire [ 3:0] opera   = instruction[27:24]; // This is often used as the subcode, but is otherwise an operand
 	wire [ 3:0] operb   = instruction[23:20]; // This is always an operand
 	wire [ 3:0] operc   = instruction[19:16]; // This is also always an operand
-	wire [23:0] imm24   = instruction[23:0];  // This is only used on a handful of instructions
 	wire        memflag = instruction[0];     // This isn't related to opcode extraction, but is used by load/store as a flag
+
+	// Immediate 24 used to be above, but it was stale. If I left it in that block, it would fuck up the comments.
+	// I truly despise this fix here, but I'm doing it for now anyways... ugly ass thing.
+	wire [23:0] imm24 = {instruction[23:16], memdata_in[15:0]};
 
 	// State machine
 	localparam S_FETCH1  = 3'd0;
@@ -193,7 +196,6 @@ module CLU                           (
 	localparam S_FETCH2  = 3'd2;
 	localparam S_EXECUTE = 3'd3;
 	localparam S_WAIT    = 3'd4;
-	localparam S_IRQ     = 3'd5;
 
 	reg [2:0] state, next_state;
 
@@ -213,7 +215,6 @@ module CLU                           (
 		if (reset) begin
 			state <= S_FETCH1;
 			pc    <= 24'h000000;
-			it    <= 25'h0000000;
 		end else begin
 			state <= next_state;
 		end
@@ -237,10 +238,9 @@ module CLU                           (
 					next_state = S_FETCH1;
 			end
 			S_WAIT: begin
-				if (waitfordata || mul_done || div_done)
+				if (lsu_done || mul_done || div_done)
 					next_state = S_FETCH1;
 			end
-			S_IRQ: next_state = S_FETCH1;
 		endcase
 	end
 
@@ -248,9 +248,10 @@ module CLU                           (
 		if (reset) begin
 			instruction <= 32'h00000000;
 			rpc         <= 24'h000000;
+			it <= 25'b1000000000000000000000000;
 
 		end else begin
-			if (interrupt && it[24] == 0 && state != S_IRQ) begin
+			if (interrupt && it[24] == 0 && state == S_FETCH1) begin
 				rpc    <= pc;
 				it[24] <= 1'b1;
 				pc     <= it[23:0];
@@ -268,17 +269,24 @@ module CLU                           (
 					end else if (opcode >= 4'h1 && opcode <= 4'h5) begin
 						instruction[15:0] <= memdata_in;
 						pc                <= pc + 2;
-					end
 					end else if (opcode == 4'h0 && opera == 4'hF) begin // I know, it's weird, but IRET is here.
 						pc     <= rpc;
 						rpc    <= 24'h000000;
-						it[24] <= 1'b0;
+						case (operb)
+							4'h0:    it[24]   <=  1'b0;
+							4'h1:    it[24]   <=  1'b1;
+							4'h2:    it[24]   <=  1'b0;
+							4'h3:    it[23:0] <=  pc + 24'd2;
+							4'h4:    it[24:0] <= {1'b0, (pc + 24'd2)};
+							default: it[24]   <=  1'b0;
+						endcase
+
 					end
 				end
 
 				S_WAIT: begin
 					if (lsu_op == 4'd8 && waitfordata) begin
-						pc <=bus_c[23:0];
+						pc <= bus_c[23:0];
 					end
 				end
 
@@ -312,237 +320,271 @@ module CLU                           (
 			mem_read    = 1;
 		end
 
-		case (opcode)
-			// First, let's deal with the subcodes.
-			4'h0: begin
-				case (opera)
-					4'h0:      ; // NOP
-					4'h1:      ; // HALT
-					4'h2: begin // PUSH
-						reg_opera = operb;
-						busmuxsel = 5'd17;
-						lsu_op    = 4'd5;
-					end
-
-					4'h3: begin; // POP
-						reg_waddr = operb;
-						busmuxsel = 5'd17;
-						lsu_op    = 4'd6;
-					end
-
-					4'h4: begin // ADD
-						busmuxsel = 5'd16;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						alu_op    = 4'd0;
-					end
-
-					4'h5: begin // MUL
-						busmuxsel = 5'd18;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						multiply  = 1;
-					end
-
-					4'h6: begin // SUB
-						busmuxsel = 5'd17;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						alu_op    = 4'd1;
-					end
-
-					4'h7: begin // DIV
-						busmuxsel = 5'd19;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						divide    = 1;
-						modulo    = 0;
-					end
-
-					4'h8: begin // MOD
-						busmuxsel = 5'd20;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						divide    = 1;
-						modulo    = 1;
-					end
-
-					4'h9: begin // AND
-						busmuxsel = 5'd16;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						alu_op    = 4'd2;
-					end
-
-					4'hA: begin // OR
-						busmuxsel = 5'd16;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						alu_op    = 4'd3;
-					end
-
-					4'hB: begin // XOR
-						busmuxsel = 5'd16;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						alu_op    = 4'd4;
-					end
-
-					4'hC: begin // NOT
-						busmuxsel = 5'd16;
-						reg_opera = operb;
-						reg_operb = operc;
-						reg_waddr = operb;
-						reg_write = 1;
-						alu_op    = 4'd5;
-					end
-
-					4'hD: begin // MOV
-						busmuxsel = 5'd17;
-						reg_opera = operb;
-						reg_waddr = operc;
-						reg_write = 1;
-					end
-
-					4'hE: begin // MOVPC
-						busmuxsel = 5'd17;
-						reg_waddr = operb;
-						reg_write = 1;
-					end
-
-					4'hF: ; // IRET is driven in a different block
-
-					default: ;
-
-				endcase
-
-			end
-			// Alright, let's handle our main codes now.
-			4'h1: begin // LOADI
-				if (state == S_EXECUTE) begin
-					busmuxsel = 5'd22;
-					reg_waddr = opera;
-					reg_write = 1;
-				end
-			end
-
-			4'h2: begin // JMP
-				jump_en   = 1;
-				jump_addr = imm24;
-			end
-
-			4'h3: begin // JZ
-				reg_opera = opera;
-				if (comp_eq) begin
-					jump_en   = 1;
-					jump_addr = imm24;
-				end
-			end
-
-			4'h4: begin // JNZ
-				reg_opera = opera;
-				if (!comp_eq) begin
-					jump_en   = 1;
-					jump_addr = imm24;
-				end
-			end
-
-			4'h5: begin // CALL
-				busmuxsel = 5'd24;
-				lsu_op    = 4'd7;
-			end
-
-			4'h6: begin // RET
-				lsu_op    = 4'd8;
-			end
-
-			4'h7: begin // SHL
-				reg_opera = opera;
-				reg_operb = operb;
-				reg_waddr = opera;
-				alu_op    = 4'd6;
-			end
-
-			4'h8: begin // SHR
-				reg_opera = opera;
-				reg_operb = operb;
-				reg_waddr = opera;
-				alu_op    = 4'd7;
-			end
-
-			4'h9: begin // JLT
-				reg_opera = opera;
-				reg_operb = operb;
-				reg_operc = operc;
-				if (comp_lt) begin
-					jump_en   = 1;
-					jump_addr = bus_c[23:0];
-				end
-			end
-
-			4'hA: begin // JGT
-				reg_opera = opera;
-				reg_operb = operb;
-				reg_operc = operc;
-				if (comp_gt) begin
-					jump_en   = 1;
-					jump_addr = bus_c[23:0];
-				end
-			end
-
-			4'hB: begin // RND
-				if (state == S_EXECUTE) begin
-					rnd_enable = 1'b1;
-					busmuxsel  = 5'd22;
-					reg_waddr  = opera;
-					reg_write  = 1'b1;
-				end
-			end
-
-			4'hC: begin // LOAD
-				reg_opera = operb;
-				reg_waddr = opera;
-				lsu_op    = memflag ? 4'd3 : 4'd1;
-			end
-
-			4'hD: begin // STORE
-				reg_opera = opera;
-				reg_operb = operb;
-				lsu_op    = memflag ? 4'd4 : 4'd2;
-			end
-
-			4'hE: ; // WCHR
-				reg_opera = opera;   // Address in first operand
-				reg_operb = operb;   // Palette data in second operand
-				reg_operc = operc;   // Character in first
-				lsu_op    = 4'd9;
-			end
-
-			4'hF: ; // RCHR
-				reg_opera = operc;
+		if (state == S_WAIT) begin
+			multiply = 0;
+			divide   = 0;
+			if (mul_done) begin 
+				busmuxsel = 5'd18;
+				reg_write = 1;
 				reg_waddr = operb;
-				lsu_op    = 4'd10;
 			end
+			if (div_done) begin
+				busmuxsel = modulo ? 20 : 19;
+				reg_write = 1;
+				reg_waddr = operb;
+			end
+		end
 
-			default: ;
+		if (state == S_EXECUTE || state == S_WAIT) begin
+			case (opcode)
+				// First, let's deal with the subcodes.
+				4'h0: begin
+					case (opera)
+						4'h0:      ; // NOP
+						4'h1:      ; // HALT
+						4'h2: begin // PUSH
+							reg_opera = operb;
+							busmuxsel = 5'd17;
+							lsu_op    = 4'd5;
+						end
+	
+						4'h3: begin; // POP
+							reg_waddr = operb;
+							busmuxsel = 5'd17;
+							lsu_op    = 4'd6;
+						end
+	
+						4'h4: begin // ADD
+							busmuxsel = 5'd16;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							reg_write = 1;
+							alu_op    = 4'd0;
+						end
+	
+						4'h5: begin // MUL
+							busmuxsel = 5'd18;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							if (state == S_EXECUTE) begin
+								multiply = 1;
+							end else if (state == S_WAIT) begin
+								multiply = 0;
+							end
+						end
+	
+						4'h6: begin // SUB
+							busmuxsel = 5'd16;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							reg_write = 1;
+							alu_op    = 4'd1;
+						end
+	
+						4'h7: begin // DIV
+							busmuxsel = 5'd19;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							if (state == S_EXECUTE) begin
+								divide = 1;
+								modulo    = 0;
+							end else if (state == S_WAIT) begin
+								divide = 0;
+								modulo    = 0;
+							end
+						end
+	
+						4'h8: begin // MOD
+							busmuxsel = 5'd20;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							if (state == S_EXECUTE) begin
+								divide = 1;
+								modulo = 1;
+							end else if (state == S_WAIT) begin
+								divide = 0;
+								modulo = 0;
+							end
+						end
+	
+						4'h9: begin // AND
+							busmuxsel = 5'd16;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							reg_write = 1;
+							alu_op    = 4'd2;
+						end
+	
+						4'hA: begin // OR
+							busmuxsel = 5'd16;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							reg_write = 1;
+							alu_op    = 4'd3;
+						end
+	
+						4'hB: begin // XOR
+							busmuxsel = 5'd16;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							reg_write = 1;
+							alu_op    = 4'd4;
+						end
+	
+						4'hC: begin // NOT
+							busmuxsel = 5'd16;
+							reg_opera = operb;
+							reg_operb = operc;
+							reg_waddr = operb;
+							reg_write = 1;
+							alu_op    = 4'd5;
+						end
+	
+						4'hD: begin // MOV
+							reg_opera = operb;
+							reg_waddr = operc;
+							busmuxsel = {1'b0, reg_opera};
+							reg_write = 1;
+						end
+	
+						4'hE: begin // MOVPC
+							busmuxsel = 5'd23;
+							reg_waddr = operb;
+							reg_write = 1;
+						end
+	
+						4'hF: ; // IRET is handled elsewhere
 
-		endcase
+						default: ;
+	
+					endcase
+	
+				end
+				// Alright, let's handle our main codes now.
+				4'h1: begin // LOADI
+					if (state == S_EXECUTE) begin
+						busmuxsel = 5'd22;
+						reg_waddr = opera;
+						reg_write = 1;
+					end
+				end
+	
+				4'h2: begin // JMP
+					jump_en   = 1;
+					jump_addr = imm24;
+				end
+	
+				4'h3: begin // JZ
+					reg_opera = opera;
+					if (comp_eq) begin
+						jump_en   = 1;
+						jump_addr = imm24;
+					end
+				end
+	
+				4'h4: begin // JNZ
+					reg_opera = opera;
+					if (!comp_eq) begin
+						jump_en   = 1;
+						jump_addr = imm24;
+					end
+				end
+	
+				4'h5: begin // CALL
+					busmuxsel = 5'd23;
+					lsu_op    = 4'd7;
+					jump_en   = 1;
+					jump_addr = imm24;
+				end
+	
+				4'h6: begin // RET
+					lsu_op    = 4'd8;
+				end
+	
+				4'h7: begin // SHL
+					reg_opera = opera;
+					reg_operb = operb;
+					reg_waddr = opera;
+					busmuxsel = 5'd16;
+					reg_write = 1;
+					alu_op    = 4'd6;
+				end
+	
+				4'h8: begin // SHR
+					reg_opera = opera;
+					reg_operb = operb;
+					reg_waddr = opera;
+					busmuxsel = 5'd16;
+					reg_write = 1;
+					alu_op    = 4'd7;
+				end
+	
+				4'h9: begin // JLT
+					reg_opera = opera;
+					reg_operb = operb;
+					reg_operc = operc;
+					if (comp_lt) begin
+						jump_en   = 1;
+						jump_addr = bus_c[23:0];
+					end
+				end
+	
+				4'hA: begin // JGT
+					reg_opera = opera;
+					reg_operb = operb;
+					reg_operc = operc;
+					if (comp_gt) begin
+						jump_en   = 1;
+						jump_addr = bus_c[23:0];
+					end
+				end
+	
+				4'hB: begin // RND
+					if (state == S_EXECUTE) begin
+						rnd_enable = 1'b1;
+						busmuxsel  = 5'd21;
+						reg_waddr  = opera;
+						reg_write  = 1'b1;
+					end
+				end
+	
+				4'hC: begin // LOAD
+					reg_opera = operb;
+					reg_waddr = opera;
+					lsu_op    = memflag ? 4'd3 : 4'd1;
+				end
+	
+				4'hD: begin // STORE
+					reg_opera = opera;
+					reg_operb = operb;
+					lsu_op    = memflag ? 4'd4 : 4'd2;
+				end
+	
+				4'hE: begin // WCHR
+					reg_opera = opera;   // Address in first operand
+					reg_operb = operb;   // Palette data in second operand
+					reg_operc = operc;   // Character in first
+					lsu_op    = 4'd9;
+				end
+	
+				4'hF: begin // RCHR
+					reg_opera = operc;
+					reg_waddr = operb;
+					lsu_op    = 4'd10;
+				end
+	
+				default: ;
+	
+			endcase
+		end
 
 	end
 
