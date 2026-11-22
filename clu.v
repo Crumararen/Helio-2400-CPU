@@ -200,6 +200,7 @@ module clu                           (
 	reg [31:0] instruction;
 	reg [23:0] pc, rpc;
 	reg [24:0] it;
+	reg        halt;
 	reg        jump_en;
 	reg [23:0] jump_addr;
 
@@ -248,8 +249,9 @@ module clu                           (
 		next_state = state;
 		case (state)
 			S_FETCH1: begin 
-				if (lsu_done && !interrupt) next_state = S_DECODE;
-				else if (lsu_done && it[24] == 0) next_state = S_DECODE;
+				if (!halt && lsu_done && !interrupt && it[24] == 0) next_state = S_DECODE;
+				else if (!halt && lsu_done && it[24] == 1) next_state = S_DECODE;
+			end
 			S_DECODE: begin
 				if (instruction[31:28] >= 4'h1 && instruction[31:28] <= 4'h5)
 					next_state = S_FETCH2;
@@ -375,8 +377,8 @@ module clu                           (
 				// First, let's deal with the subcodes.
 				4'h0: begin
 					case (opera)
-						4'h0:      ; // NOP
-						4'h1:      ; // HALT
+						4'h0:          ;  // NOP
+						4'h1: halt <= 1;  // HALT
 
 						4'h2: begin // PUSH
 							reg_opera = operb;
@@ -540,7 +542,6 @@ module clu                           (
 	
 				4'h6: begin // RET
 					lsu_op    = 4'd8;
-					lsu_start = 1;
 				end
 	
 				4'h7: begin // SHL
