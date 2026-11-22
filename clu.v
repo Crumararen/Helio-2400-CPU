@@ -260,13 +260,13 @@ module clu                           (
 			end
 			S_FETCH2: if (lsu_done) next_state = S_EXECUTE;
 			S_EXECUTE: begin
-				if (lsu_op != 4'd0 || multiply || divide)
+				if (lsu_op != 4'd0 || multiply || divide || rnd_enable)
 					next_state = S_WAIT;
 				else
 					next_state = S_FETCH1;
 			end
 			S_WAIT: begin
-				if (lsu_done || mul_done || div_done)
+				if (lsu_done || mul_done || div_done || opcode == 4'hB)
 					next_state = S_FETCH1;
 			end
 		endcase
@@ -278,6 +278,7 @@ module clu                           (
 			rpc            <= 24'h000000;
 			it             <= 25'b1000000000000000000000000;
 			pc             <= 24'h000000;
+			halt           <= 1'b0;
 		end else begin
 			if (interrupt && it[24] == 0 && state == S_FETCH1) begin
 				rpc    <= pc;
@@ -287,7 +288,7 @@ module clu                           (
 
 			case (state)
 				S_FETCH1: begin
-					if (lsu_done && !interrupt) begin
+					if (lsu_done && !interrupt && !halt) begin
 						instruction[31:16] <= memdata_in;
 						pc                 <= pc + 2;
 					end
@@ -301,7 +302,9 @@ module clu                           (
 				end
 
 				S_EXECUTE: begin
-					if (jump_en) begin
+					if (opcode == 4'h0 && opera == 4'h1) // HALT
+						halt <= 1'b1;
+					else if (jump_en) begin
 						pc <= jump_addr;
 					end else if (opcode == 4'h0 && opera == 4'hF) begin // I know, it's weird, but IRET is here.
 						pc     <= rpc;
@@ -356,37 +359,22 @@ module clu                           (
 			lsu_start   = 1;
 		end
 
-		if (state == S_WAIT) begin
-			lsu_start = 0;
-			multiply  = 0;
-			divide    = 0;
-			if (mul_done) begin 
-				busmuxsel = 5'd18;
-				reg_write = 1;
-				reg_waddr = operb;
-			end
-			if (div_done) begin
-				busmuxsel = modulo ? 20 : 19;
-				reg_write = 1;
-				reg_waddr = operb;
-			end
-		end
+		if ((opcode == 4'hC || opcode == 4'hD || opcode == 4'hE || opcode == 4'hF) && (state == S_EXECUTE))
+			memaddr_out = bus_a[23:0];
 
 		if (state == S_EXECUTE || state == S_WAIT) begin
 			case (opcode)
 				// First, let's deal with the subcodes.
 				4'h0: begin
 					case (opera)
-						4'h0:          ;  // NOP
-						4'h1: halt <= 1;  // HALT
-
 						4'h2: begin // PUSH
 							reg_opera = operb;
 							busmuxsel = operb;
 							lsu_op    = 4'd5;
 						end
 	
-						4'h3: begin; // POP
+						4'h3: begin // POP
+							reg_waddr = operb;
 							lsu_op    = 4'd6;
 						end
 	
@@ -583,13 +571,12 @@ module clu                           (
 				end
 	
 				4'hB: begin // RND
-					if (state == S_EXECUTE) begin
-						rnd_enable = 1'b1;
-					end
+					if (state == S_EXECUTE) rnd_enable = 1'b1;
 				end
 	
 				4'hC: begin // LOAD
 					reg_opera = operb;
+					reg_waddr = opera;
 					lsu_op    = memflag ? 4'd3 : 4'd1;
 				end
 	
@@ -610,6 +597,8 @@ module clu                           (
 	
 				4'hF: begin // RCHR
 					reg_opera = opera;
+					reg_waddr = operb;
+					busmuxsel = operc;
 					lsu_op    = 4'd10;
 				end
 	
@@ -618,48 +607,30 @@ module clu                           (
 			endcase
 		end
 
+		if (state == S_WAIT) begin
+			lsu_start = 0;
+			multiply  = 0;
+			divide    = 0;
+			if (mul_done) begin 
+				busmuxsel = 5'd18;
+				reg_write = 1;
+				reg_waddr = operb;
+			end
+			if (div_done) begin
+				busmuxsel = (opcode == 4'h8) ? 20 : 19;
+				reg_write = 1;
+				reg_waddr = operb;
+			end
+		end
+
 		if (state == S_EXECUTE && lsu_op != 0)
 			lsu_start = 1;
-
-		if (state == S_WAIT && lsu_done) begin
-			case (lsu_op)
-				4'd1: begin // LOAD
-					reg_write = 1;
-					reg_waddr = opera;
-					busmuxsel = 5'd17;
-				end
-
-				4'd3: begin // LOAD2
-					reg_write = 1;
-					reg_waddr = opera;
-					busmuxsel = 5'd17;
-				end
-
-				4'd6: begin // POP 
-					reg_write = 1;
-					reg_waddr = operb;
-					busmuxsel = 5'd17;
-				end
-
-				4'd8: begin // RET
-					reg_write = 1;
-					reg_waddr = operb;
-					busmuxsel = operc;
-				end
-
-				4'd10: begin // RCHR
-					reg_write = 1;
-					reg_waddr = operb;
-					busmuxsel = 5'd17;
-				end
-
-			endcase
-
-			if (opcode == 4'hb) begin // RND
-				busmuxsel  = 5'd21;
-				reg_waddr  = opera;
-				reg_write  = 1'b1;
-			end
+		if (state == S_WAIT && lsu_op == 4'd8 && lsu_done)
+			busmuxsel = 5'd17;
+		if (state == S_WAIT && opcode == 4'hB) begin
+			busmuxsel = 5'd21;
+			reg_waddr = opera;
+			reg_write = 1;
 		end
 	end
 
