@@ -1,0 +1,28 @@
+
+The memory controller's intended behavior is that it keeps the MEMREADY line high by default, going low
+while actively working on a memory request, then going high when that request is done. 
+
+My current design interleaves two memory modules and also has separate X16 memory. I'm considering perhaps
+removing the X16 memory and have everything be interleaved X8 though. Not sure it matters from the CPU's
+perspective at this point, honestly? Dunno. I'll think about it. 
+
+One way or another, though.. WCHR and RCHR should still treat the character buffers they write into as
+word-addressed, not byte-addressed. They point at cell indices, and each cell holds one byte of character
+data, and one byte of rendering data, including the palette and whatever else is there. It is a far more
+pleasant experience to treat chraddr + 1 as equal to the address of the next character and its rendering
+data rather than incrementing by just one byte. And... Perhaps, if we're doing that anyways, we should
+treat the stack the same way after all? hm... Well, either way- whether interleaved x8 or dedicated x16,
+we should keep those regions cell/word-addressable I think.
+
+Actually....
+Let's add a hardware switch to the CPU that signals whether to treat the STACK as a byte-addressed
+or word-addressed region. Since the only commands that alter the SP are PUSH, POP, RET and CALL,
+we can safely do that and just switch between "stack size * 1, increment/decrement by 1" and 
+"stack size * 2, increment/decrement by 2" without ever even having to rewrite any software.
+Also, I think we should reduce the original specified hardware switch from a full 8 bits to
+a one-or-two-pin hardware switch that selects either between 2K and 4K stack cells or
+between generally how many thousands of stack cells (00 = 1K, 01 = 2K, 10 = 4K, 11 = 8K)
+depending on which model we want to use... Yes, I like that. Saving for later.
+
+Lastly, yes... I think that all our I/O should be directly mapped to memory.
+It just makes everything so much simpler for the programmer.
