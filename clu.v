@@ -173,17 +173,16 @@ module clu                           (
 	input wire        clock,        // Clock
 	input wire        reset,        // Reset
 	input wire        interrupt,    // IRQ pin on the CPU must feed into this
-	input wire [15:0] memdata_in,   // Memory data in
 	input wire        lsu_done,     // Waiting on the LSU
 	input wire        mul_done,     // Waiting on the Multiplier
 	input wire        div_done,     // Waiting on the Divider
 	input wire        alu_zero,     // Use ALU to see if zero for JZ/JNZ
+	input wire [15:0] memdata_in,   // Memory data passed to us by the LSU
 	input wire [31:0] bus_a,        // Internal data bus A
 	input wire [31:0] bus_b,        // Internal data bus B
 	input wire [31:0] bus_c,        // Internal data bus C
 	output reg [23:0] memaddr_out,  // Memory address out
-	output reg        mem_read,     // Tells the memory manager to read
-	output reg        mem_write,    // Tells the memory manager to write
+	output reg        lsu_start,    // Tell the LSU to do something
 	output reg [ 3:0] alu_op,       // ALU is pretty damn simple I do believe
 	output reg [ 3:0] lsu_op,       // LSU is also pretty simple from the CLU's perspective. Not on the inside, lemme tell ya
 	output reg [ 3:0] reg_opera,    // Read register A on internal bus 1
@@ -205,15 +204,12 @@ module clu                           (
 	reg [23:0] jump_addr;
 
 	// Internal opcode extraction
+	wire [23:0] imm24   = instruction[23:0];  // Yayyyyyy! We fixed that godawful fix from before!! it's so pretty now ^v^
 	wire [ 3:0] opcode  = instruction[31:28]; // This is always either an opcode or the subcode prefix (0)
 	wire [ 3:0] opera   = instruction[27:24]; // This is often used as the subcode, but is otherwise an operand
 	wire [ 3:0] operb   = instruction[23:20]; // This is always an operand
 	wire [ 3:0] operc   = instruction[19:16]; // This is also always an operand
 	wire        memflag = instruction[0];     // This isn't related to opcode extraction, but is used by load/store as a flag
-
-	// Immediate 24 used to be above, but it was stale. If I left it in that block, it would fuck up the comments.
-	// I truly despise this fix here, but I'm doing it for now anyways... ugly ass thing.
-	wire [23:0] imm24 = {instruction[23:16], memdata_in[15:0]};
 
 	// State machine
 	localparam S_FETCH1  = 3'd0;
@@ -248,14 +244,14 @@ module clu                           (
 	always @(*) begin
 		next_state = state;
 		case (state)
-			S_FETCH1: next_state = S_DECODE;
+			S_FETCH1: if (lsu_done) next_state = S_DECODE;
 			S_DECODE: begin
-				if (memdata_in[15:12] >= 4'h1 && memdata_in[15:12] <= 4'h5)
+				if (instruction[31:28] >= 4'h1 && instruction[31:28] <= 4'h5)
 					next_state = S_FETCH2;
 				else
 					next_state = S_EXECUTE;
 			end
-			S_FETCH2: next_state = S_EXECUTE;
+			S_FETCH2: if (lsu_done) next_state = S_EXECUTE;
 			S_EXECUTE: begin
 				if (lsu_op != 4'd0 || multiply || divide)
 					next_state = S_WAIT;
@@ -283,17 +279,23 @@ module clu                           (
 			end
 
 			case (state)
-				S_DECODE: begin
-					instruction[31:16] <= memdata_in;
-					pc                 <= pc + 2;
+				S_FETCH1: begin
+					if (lsu_done) begin
+						instruction[31:16] <= memdata_in;
+						pc                 <= pc + 2;
+					end
+				end
+
+				S_FETCH2: begin
+					if (lsu_done) begin
+						instruction[15:0] <= memdata_in;
+						pc                <= pc + 2;
+					end
 				end
 
 				S_EXECUTE: begin
 					if (jump_en) begin
 						pc <= jump_addr;
-					end else if (opcode >= 4'h1 && opcode <= 4'h5) begin
-						instruction[15:0] <= memdata_in;
-						pc                <= pc + 2;
 					end else if (opcode == 4'h0 && opera == 4'hF) begin // I know, it's weird, but IRET is here.
 						pc     <= rpc;
 						rpc    <= 24'h000000;
@@ -310,6 +312,11 @@ module clu                           (
 				end
 
 				S_WAIT: begin
+
+					if (opcode == 4'h6 && lsu_done) begin
+						pc <= bus_c[23:0];
+					end
+
 					if (lsu_op == 4'd8) begin
 						pc <= bus_c[23:0];
 					end
@@ -322,8 +329,7 @@ module clu                           (
 	// Datapath contr
 	always @(*) begin
 		// Default control signal defaults
-		mem_read    = 0;
-		mem_write   = 1'b0;
+		lsu_start   = 1'b0;
 		reg_write   = 1'b0;		
 		alu_op      = 4'b0000;
 		lsu_op      = 4'b0000;
@@ -342,7 +348,8 @@ module clu                           (
 
 		if (state == S_FETCH1 || state == S_FETCH2) begin
 			memaddr_out = pc;
-			mem_read    = 1;
+			lsu_op      = 4'd11;
+			lsu_start   = 1;
 		end
 
 		if (state == S_WAIT) begin
@@ -371,12 +378,14 @@ module clu                           (
 							reg_opera = operb;
 							busmuxsel = 5'd17;
 							lsu_op    = 4'd5;
+							lsu_start = 1;
 						end
 	
 						4'h3: begin; // POP
 							reg_waddr = operb;
 							busmuxsel = 5'd17;
 							lsu_op    = 4'd6;
+							lsu_start = 1;
 						end
 	
 						4'h4: begin // ADD
@@ -473,8 +482,8 @@ module clu                           (
 						end
 	
 						4'hD: begin // MOV
-							reg_opera = operb;
-							reg_waddr = operc;
+							reg_opera = operc;
+							reg_waddr = operb;
 							busmuxsel = {1'b0, reg_opera};
 							reg_write = 1;
 						end
@@ -525,12 +534,14 @@ module clu                           (
 				4'h5: begin // CALL
 					busmuxsel = 5'd23;
 					lsu_op    = 4'd7;
+					lsu_start = 1;
 					jump_en   = 1;
 					jump_addr = imm24;
 				end
 	
 				4'h6: begin // RET
 					lsu_op    = 4'd8;
+					lsu_start = 1;
 				end
 	
 				4'h7: begin // SHL
@@ -584,12 +595,14 @@ module clu                           (
 					reg_opera = operb;
 					reg_waddr = opera;
 					lsu_op    = memflag ? 4'd3 : 4'd1;
+					lsu_start = 1;
 				end
 	
 				4'hD: begin // STORE
 					reg_opera = opera;
 					reg_operb = operb;
 					lsu_op    = memflag ? 4'd4 : 4'd2;
+					lsu_start = 1;
 				end
 	
 				4'hE: begin // WCHR
@@ -597,12 +610,15 @@ module clu                           (
 					reg_operb = operb;   // Palette data in second operand
 					reg_operc = operc;   // Character in first
 					lsu_op    = 4'd9;
+					lsu_start = 1;
 				end
 	
 				4'hF: begin // RCHR
-					reg_opera = operc;
+					reg_opera = opera;
+					reg_operb = operc;
 					reg_waddr = operb;
 					lsu_op    = 4'd10;
+					lsu_start = 1;
 				end
 	
 				default: ;

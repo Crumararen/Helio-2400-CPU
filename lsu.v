@@ -34,6 +34,7 @@ module lsu	                       (   // do not trust me on that.
         localparam LSU_RET   = 4'd8;   // Pop from stack twice, reconstruct the program pointer
 	localparam LSU_WCHR  = 4'd9;   // Write low sixteen bits of intdata_in to memaddr
 	localparam LSU_RCHR  = 4'd10;  // Read sixteen bits from address
+	localparam LSU_FETCH = 4'd11;  // Fetch CLU Instruction word
 
 	localparam S_IDLE    = 3'd0;   // Waiting for an instruction
 	localparam S_MEMWAIT = 3'd1;   // Waiting on memory controller
@@ -60,7 +61,6 @@ module lsu	                       (   // do not trust me on that.
 		if (reset) begin                       // You try to teach yourself how to do this shit in a week man.
 			half_select <= 0;              // Anyways, back to the program. I won't be using too many comments here
 			membusyseen <= 0;              // Because this part is pretty simple, and I can't make em pretty here TvT
-			lsu_done    <= 0;
 			first_half  <= 16'h0000;
 			state       <= S_IDLE;
 			operlatch   <= LSU_NOP;
@@ -79,15 +79,21 @@ module lsu	                       (   // do not trust me on that.
 				S_IDLE: begin
 
 					if (lsu_start) begin
-						membusyseen <= 0
-						half_select <= 0;
-						operlatch   <= lsu_op;
-						addrlatch   <= memaddr_in;
-						datalatch   <= intdata_in;
-						auxilatch   <= auxdata_in;
-						destlatch   <= regaddr_in;
-						des2latch   <= intdata_in[3:0];
-						state       <= S_MEMWAIT;
+
+						if (lsu_op == LSU_NOP) begin
+							operlatch   <= LSU_NOP;
+							state       <= S_DONE;
+						end else begin
+							membusyseen <= 0;
+							half_select <= 0;
+							operlatch   <= lsu_op;
+							addrlatch   <= memaddr_in;
+							datalatch   <= intdata_in;
+							auxilatch   <= auxdata_in;
+							destlatch   <= regaddr_in;
+							des2latch   <= intdata_in[3:0];
+							state       <= S_MEMWAIT;
+						end
 					end
 				end
 
@@ -102,7 +108,7 @@ module lsu	                       (   // do not trust me on that.
 
 							LSU_POP, LSU_RET: begin
 
-								if(half_select == 0)
+								if(half_select == 0) begin
 									first_half    <= outdata_in;
 									state         <= S_NEXT;
 								end else begin
@@ -127,7 +133,7 @@ module lsu	                       (   // do not trust me on that.
 								state     <= S_WB1;
 							end
 
-							LSU_LOAD2: begin
+							LSU_LOAD2, LSU_FETCH: begin
 								restlatch <= {16'h0000, outdata_in[15:0]};
 								state     <= S_WB1;
 							end
@@ -151,6 +157,7 @@ module lsu	                       (   // do not trust me on that.
 
 				S_NEXT: begin
 
+					membusyseen   <= 0;
 					half_select   <= 1;
 					addrlatch     <= memaddr_in;
 					state         <= S_MEMWAIT;
@@ -170,7 +177,6 @@ module lsu	                       (   // do not trust me on that.
 				end
 
 				S_DONE: begin
-					lsu_done <= 1;
 					state    <= S_IDLE;
 				end
 
@@ -185,6 +191,7 @@ module lsu	                       (   // do not trust me on that.
 
 	always @(*) begin
 
+		lsu_done    = (state == S_DONE);
 		mem_req     = 0;
 		mem_write   = 0;
 		memaddr_out = addrlatch;
@@ -194,6 +201,17 @@ module lsu	                       (   // do not trust me on that.
 		regaddr_out = destlatch;
 		regwrite    = 0;
 		stackpnt_op = 2'b00;
+
+		if (state == S_MEMWAIT && !membusyseen) begin
+			mem_req = 1;
+
+			case (operlatch)
+				LSU_STORE, LSU_STOR2, LSU_PUSH, LSU_CALL, LSU_WCHR:
+					mem_write = 1;
+				default:
+					mem_write = 0;
+			endcase
+		end
 
 		// Alright, let's start on the combinational logic now.
 		case (operlatch)
@@ -212,15 +230,20 @@ module lsu	                       (   // do not trust me on that.
 			default:   outdata_out = 16'h0000;
 		endcase
 
-		if (memready) begin
+		// I wonder why it is that I seem to go always from either the extreme level
+		// of leaving comments on every single line of code I ever write or to the
+		// other extreme of seemingly never writing any comments at all?
+		// Surely a balance can by struck, no?
+		// Hmmmmmm. Well, anyways.
+		// Get updated, loser.
+
+		if (state == S_MEMWAIT && mem_req && memready) begin
 			case(operlatch)
 				LSU_PUSH, LSU_CALL: stackpnt_op = 2'b01;
 				LSU_POP, LSU_RET:   stackpnt_op = 2'b10;
 				default:            stackpnt_op = 2'b00;
 			endcase
 		end
-
-
 
 		// Register writeback
 		case (state)
@@ -236,7 +259,7 @@ module lsu	                       (   // do not trust me on that.
 					LSU_RCHR: begin
 						regwrite    = 1;
 						regaddr_out = destlatch;
-						intdata_out = {24'h000000, rchr_data[7:0]};
+						intdata_out = {24'h000000, rchr_data[15:8]};
 					end
 				endcase
 			end
@@ -250,7 +273,7 @@ module lsu	                       (   // do not trust me on that.
 			end
 
 			S_DONE: begin
-				if(operlatch == LSU_RET)
+				if(operlatch == LSU_RET || operlatch == LSU_FETCH)
 					intdata_out = restlatch;
 			end
 
