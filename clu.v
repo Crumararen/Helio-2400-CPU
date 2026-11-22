@@ -92,7 +92,7 @@ module comparator        (
 	output       lt,
 	output       gt  );
 
-	assign eq = (a == b);
+	assign eq = (a == 32'd0);
 	assign lt = (a < b);
 	assign gt = (a > b);
 endmodule
@@ -182,6 +182,8 @@ module clu                           (
 	input wire [31:0] bus_b,        // Internal data bus B
 	input wire [31:0] bus_c,        // Internal data bus C
 	output reg [23:0] memaddr_out,  // Memory address out
+	output reg [23:0] pc_out,       // Export value of program counter
+	output reg [23:0] imm_out,      // And immediate value
 	output reg        lsu_start,    // Tell the LSU to do something
 	output reg [ 3:0] alu_op,       // ALU is pretty damn simple I do believe
 	output reg [ 3:0] lsu_op,       // LSU is also pretty simple from the CLU's perspective. Not on the inside, lemme tell ya
@@ -209,7 +211,11 @@ module clu                           (
 	wire [ 3:0] opera   = instruction[27:24]; // This is often used as the subcode, but is otherwise an operand
 	wire [ 3:0] operb   = instruction[23:20]; // This is always an operand
 	wire [ 3:0] operc   = instruction[19:16]; // This is also always an operand
-	wire        memflag = instruction[0];     // This isn't related to opcode extraction, but is used by load/store as a flag
+	wire        memflag = instruction[16];    // This isn't related to opcode extraction, but is used by load/store as a flag
+
+	// For the top module
+	assign pc_out  = pc;
+	assign imm_out = imm24;
 
 	// State machine
 	localparam S_FETCH1  = 3'd0;
@@ -374,9 +380,10 @@ module clu                           (
 					case (opera)
 						4'h0:      ; // NOP
 						4'h1:      ; // HALT
+
 						4'h2: begin // PUSH
 							reg_opera = operb;
-							busmuxsel = 5'd17;
+							busmuxsel = opera;
 							lsu_op    = 4'd5;
 							lsu_start = 1;
 						end
@@ -594,6 +601,7 @@ module clu                           (
 				4'hC: begin // LOAD
 					reg_opera = operb;
 					reg_waddr = opera;
+					busmuxsel = 5'd17;
 					lsu_op    = memflag ? 4'd3 : 4'd1;
 					lsu_start = 1;
 				end
@@ -601,6 +609,7 @@ module clu                           (
 				4'hD: begin // STORE
 					reg_opera = opera;
 					reg_operb = operb;
+					musmuxsel = operb;
 					lsu_op    = memflag ? 4'd4 : 4'd2;
 					lsu_start = 1;
 				end
@@ -609,14 +618,15 @@ module clu                           (
 					reg_opera = opera;   // Address in first operand
 					reg_operb = operb;   // Palette data in second operand
 					reg_operc = operc;   // Character in first
+					busmuxsel = operc;
 					lsu_op    = 4'd9;
 					lsu_start = 1;
 				end
 	
 				4'hF: begin // RCHR
 					reg_opera = opera;
-					reg_operb = operc;
 					reg_waddr = operb;
+					busmuxsel = operc;
 					lsu_op    = 4'd10;
 					lsu_start = 1;
 				end
