@@ -123,9 +123,7 @@ module register_file				(
 			for (i = 0; i <16; i = i + 1) begin
 				regs[i] <= 32'h00000000;
 			end
-		end 
-
-		if (write_enable) begin
+		end else if (write_enable) begin
 			regs[write_addr] <= write_data;
 		end
 	end
@@ -170,33 +168,33 @@ endmodule
 // Oh sweet lord above heaven and earth, please save me from what i'm about to do.
 // I'll actually write comments this time because this shit confuses tf outta me..
 module clu                           (
-	input wire        clock,        // Clock
-	input wire        reset,        // Reset
-	input wire        interrupt,    // IRQ pin on the CPU must feed into this
-	input wire        lsu_done,     // Waiting on the LSU
-	input wire        mul_done,     // Waiting on the Multiplier
-	input wire        div_done,     // Waiting on the Divider
-	input wire        alu_zero,     // Use ALU to see if zero for JZ/JNZ
-	input wire [15:0] memdata_in,   // Memory data passed to us by the LSU
-	input wire [31:0] bus_a,        // Internal data bus A
-	input wire [31:0] bus_b,        // Internal data bus B
-	input wire [31:0] bus_c,        // Internal data bus C
-	output reg [23:0] memaddr_out,  // Memory address out
-	output reg [23:0] pc_out,       // Export value of program counter
-	output reg [23:0] imm_out,      // And immediate value
+	input wire         clock,        // Clock
+	input wire         reset,        // Reset
+	input wire         interrupt,    // IRQ pin on the CPU must feed into this
+	input wire         lsu_done,     // Waiting on the LSU
+	input wire         mul_done,     // Waiting on the Multiplier
+	input wire         div_done,     // Waiting on the Divider
+	input wire         alu_zero,     // Use ALU to see if zero for JZ/JNZ
+	input wire  [15:0] memdata_in,   // Memory data passed to us by the LSU
+	input wire  [31:0] bus_a,        // Internal data bus A
+	input wire  [31:0] bus_b,        // Internal data bus B
+	input wire  [31:0] bus_c,        // Internal data bus C
+	output reg  [23:0] memaddr_out,  // Memory address out
+	output wire [23:0] pc_out,       // Export value of program counter
+	output wire [23:0] imm_out,      // And immediate value
 	output reg        lsu_start,    // Tell the LSU to do something
-	output reg [ 3:0] alu_op,       // ALU is pretty damn simple I do believe
-	output reg [ 3:0] lsu_op,       // LSU is also pretty simple from the CLU's perspective. Not on the inside, lemme tell ya
-	output reg [ 3:0] reg_opera,    // Read register A on internal bus 1
-	output reg [ 3:0] reg_operb,    // Read register B on internal bus 2
-	output reg [ 3:0] reg_operc,    // Read register C on internal bus 3
-	output reg [ 3:0] reg_waddr,    // Address of register to write to, always uses bus 3
-	output reg        reg_write,    // Tells the register file to write
-	output reg [ 4:0] busmuxsel,    // Tells the internal data MUX who gets the bus
-	output reg        multiply,     // Tell the multiplier to act
-	output reg        divide,       // Tell the divider to divide
-	output reg        modulo,       // Tell the LSU to store the remainder instead of the divider in target register
-	output reg        rnd_enable ); // Tell the random number generator to give us somethin
+	output reg  [ 3:0] alu_op,       // ALU is pretty damn simple I do believe
+	output reg  [ 3:0] lsu_op,       // LSU is also pretty simple from the CLU's perspective. Not on the inside, lemme tell ya
+	output reg  [ 3:0] reg_opera,    // Read register A on internal bus 1
+	output reg  [ 3:0] reg_operb,    // Read register B on internal bus 2
+	output reg  [ 3:0] reg_operc,    // Read register C on internal bus 3
+	output reg  [ 3:0] reg_waddr,    // Address of register to write to, always uses bus 3
+	output reg         reg_write,    // Tells the register file to write
+	output reg  [ 4:0] busmuxsel,    // Tells the internal data MUX who gets the bus
+	output reg         multiply,     // Tell the multiplier to act
+	output reg         divide,       // Tell the divider to divide
+	output reg         modulo,       // Tell the LSU to store the remainder instead of the divider in target register
+	output reg         rnd_enable ); // Tell the random number generator to give us somethin
 
 	// Dedicated registers
 	reg [31:0] instruction;
@@ -241,7 +239,6 @@ module clu                           (
 	always @(posedge clock or posedge reset) begin
 		if (reset) begin
 			state <= S_FETCH1;
-			pc    <= 24'h000000;
 		end else begin
 			state <= next_state;
 		end
@@ -250,7 +247,7 @@ module clu                           (
 	always @(*) begin
 		next_state = state;
 		case (state)
-			S_FETCH1: if (lsu_done) next_state = S_DECODE;
+			S_FETCH1: if (lsu_done && !interrupt) next_state = S_DECODE;
 			S_DECODE: begin
 				if (instruction[31:28] >= 4'h1 && instruction[31:28] <= 4'h5)
 					next_state = S_FETCH2;
@@ -273,10 +270,10 @@ module clu                           (
 
 	always @(posedge clock or posedge reset) begin
 		if (reset) begin
-			instruction <= 32'h00000000;
-			rpc         <= 24'h000000;
-			it <= 25'b1000000000000000000000000;
-
+			instruction    <= 32'h00000000;
+			rpc            <= 24'h000000;
+			it             <= 25'b1000000000000000000000000;
+			pc             <= 24'h000000;
 		end else begin
 			if (interrupt && it[24] == 0 && state == S_FETCH1) begin
 				rpc    <= pc;
@@ -286,7 +283,7 @@ module clu                           (
 
 			case (state)
 				S_FETCH1: begin
-					if (lsu_done) begin
+					if (lsu_done && !interrupt) begin
 						instruction[31:16] <= memdata_in;
 						pc                 <= pc + 2;
 					end
@@ -323,9 +320,6 @@ module clu                           (
 						pc <= bus_c[23:0];
 					end
 
-					if (lsu_op == 4'd8) begin
-						pc <= bus_c[23:0];
-					end
 				end
 
 			endcase
@@ -359,8 +353,9 @@ module clu                           (
 		end
 
 		if (state == S_WAIT) begin
-			multiply = 0;
-			divide   = 0;
+			lsu_start = 0;
+			multiply  = 0;
+			divide    = 0;
 			if (mul_done) begin 
 				busmuxsel = 5'd18;
 				reg_write = 1;
@@ -383,16 +378,12 @@ module clu                           (
 
 						4'h2: begin // PUSH
 							reg_opera = operb;
-							busmuxsel = opera;
+							busmuxsel = operb;
 							lsu_op    = 4'd5;
-							lsu_start = 1;
 						end
 	
 						4'h3: begin; // POP
-							reg_waddr = operb;
-							busmuxsel = 5'd17;
 							lsu_op    = 4'd6;
-							lsu_start = 1;
 						end
 	
 						4'h4: begin // ADD
@@ -541,7 +532,6 @@ module clu                           (
 				4'h5: begin // CALL
 					busmuxsel = 5'd23;
 					lsu_op    = 4'd7;
-					lsu_start = 1;
 					jump_en   = 1;
 					jump_addr = imm24;
 				end
@@ -600,18 +590,14 @@ module clu                           (
 	
 				4'hC: begin // LOAD
 					reg_opera = operb;
-					reg_waddr = opera;
-					busmuxsel = 5'd17;
 					lsu_op    = memflag ? 4'd3 : 4'd1;
-					lsu_start = 1;
 				end
 	
 				4'hD: begin // STORE
 					reg_opera = opera;
 					reg_operb = operb;
-					musmuxsel = operb;
+					busmuxsel = operb;
 					lsu_op    = memflag ? 4'd4 : 4'd2;
-					lsu_start = 1;
 				end
 	
 				4'hE: begin // WCHR
@@ -620,15 +606,11 @@ module clu                           (
 					reg_operc = operc;   // Character in first
 					busmuxsel = operc;
 					lsu_op    = 4'd9;
-					lsu_start = 1;
 				end
 	
 				4'hF: begin // RCHR
 					reg_opera = opera;
-					reg_waddr = operb;
-					busmuxsel = operc;
 					lsu_op    = 4'd10;
-					lsu_start = 1;
 				end
 	
 				default: ;
@@ -636,6 +618,43 @@ module clu                           (
 			endcase
 		end
 
+		if (state == S_EXECUTE && lsu_op != 0)
+			lsu_start = 1;
+
+		if (state == S_WAIT && lsu_done) begin
+			case (lsu_op)
+				4'd1: begin // LOAD
+					reg_write = 1;
+					reg_waddr = opera;
+					busmuxsel = 5'd17;
+				end
+
+				4'd3: begin // LOAD2
+					reg_write = 1;
+					reg_waddr = opera;
+					busmuxsel = 5'd17;
+				end
+
+				4'd6: begin // POP 
+					reg_write = 1;
+					reg_waddr = operb;
+					busmuxsel = 5'd17;
+				end
+
+				4'd8: begin // RET
+					reg_write = 1;
+					reg_waddr = operb;
+					busmuxsel = operc;
+				end
+
+				4'd10: begin // RCHR
+					reg_write = 1;
+					reg_waddr = operb;
+					busmuxsel = 5'd17;
+				end
+
+			endcase
+		end
 	end
 
 endmodule
