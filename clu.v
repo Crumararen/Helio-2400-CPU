@@ -247,7 +247,9 @@ module clu                           (
 	always @(*) begin
 		next_state = state;
 		case (state)
-			S_FETCH1: if (lsu_done && !interrupt) next_state = S_DECODE;
+			S_FETCH1: begin 
+				if (lsu_done && !interrupt) next_state = S_DECODE;
+				else if (lsu_done && it[24] == 0) next_state = S_DECODE;
 			S_DECODE: begin
 				if (instruction[31:28] >= 4'h1 && instruction[31:28] <= 4'h5)
 					next_state = S_FETCH2;
@@ -582,9 +584,6 @@ module clu                           (
 				4'hB: begin // RND
 					if (state == S_EXECUTE) begin
 						rnd_enable = 1'b1;
-						busmuxsel  = 5'd21;
-						reg_waddr  = opera;
-						reg_write  = 1'b1;
 					end
 				end
 	
@@ -654,6 +653,12 @@ module clu                           (
 				end
 
 			endcase
+
+			if (opcode == 4'hb) begin // RND
+				busmuxsel  = 5'd21;
+				reg_waddr  = opera;
+				reg_write  = 1'b1;
+			end
 		end
 	end
 
