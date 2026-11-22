@@ -39,20 +39,43 @@ endmodule
 // 22     : Immediate (memdata_in, zero extend)
 // 23     : PC
 module internaldatamux			(
-	input  [31:0] sources [0:23],
+	input  [31:0] R0,
+	input  [31:0] R1,
+	input  [31:0] R2,
+	input  [31:0] R3,
+	input  [31:0] R4,
+	input  [31:0] R5,
+	input  [31:0] R6,
+	input  [31:0] R7,
+	input  [31:0] R8,
+	input  [31:0] R9,
+	input  [31:0] R10,
+	input  [31:0] R11,
+	input  [31:0] R12,
+	input  [31:0] R13,
+	input  [31:0] R14,
+	input  [31:0] R15,
+	input  [31:0] ALU,
+	input  [31:0] LSU,
+	input  [31:0] DIV,
+	input  [31:0] MUL,
+	input  [31:0] MOD,
+	input  [31:0] RNG,
+	input  [31:0] IMM,
+	input  [31:0] PC,
 	input  [ 4:0] select,
 	output [31:0] out		);
 
 	wire [31:0] outa, outb, outc;
 
-	mux8 muxa (.in0(sources[0]), .in1(sources[1]), .in2(sources[2]), .in3(sources[3]), .in4(sources[4]), 
-	.in5(sources[5]), .in6(sources[6]), .in7(sources[7]), .sel(select[2:0]), .out(outa));
+	mux8 muxa (.in0(R0), .in1(R1), .in2(R2), .in3(R3), .in4(R4), 
+	.in5(R5), .in6(R6), .in7(R7), .sel(select[2:0]), .out(outa));
 
-	mux8 muxb (.in0(sources[8]), .in1(sources[9]), .in2(sources[10]), .in3(sources[11]), .in4(sources[12]), 
-	.in5(sources[13]), .in6(sources[14]), .in7(sources[15]), .sel(select[2:0]), .out(outb));
+	mux8 muxb (.in0(R8), .in1(R9), .in2(R10), .in3(R11), .in4(R12), 
+	.in5(R13), .in6(R14), .in7(R15), .sel(select[2:0]), .out(outb));
 
-	mux8 muxc (.in0(sources[16]), .in1(sources[17]), .in2(sources[18]), .in3(sources[19]), .in4(sources[20]), 
-	.in5(sources[21]), .in6(sources[22]), .in7(sources[23]), .sel(select[2:0]), .out(outc));
+	mux8 muxc (.in0(ALU), .in1(LSU), .in2(MUL), .in3(DIV), .in4(MOD), 
+	.in5(RNG), .in6(IMM), .in7(PC), .sel(select[2:0]), .out(outc));
 
 	assign out = (select[4:3] == 2'b00) ? outa :
 	             (select[4:3] == 2'b01) ? outb :
@@ -100,7 +123,9 @@ module register_file				(
 			for (i = 0; i <16; i = i + 1) begin
 				regs[i] <= 32'h00000000;
 			end
-		end else if (write_enable) begin
+		end 
+
+		if (write_enable) begin
 			regs[write_addr] <= write_data;
 		end
 	end
@@ -132,9 +157,9 @@ module rngen                      (
 		end else begin
 			randreg <= (randreg == 32'd0) ? 32'hDEADBEEF : x3;
 
-			if (out_enable)
+			if (out_enable) begin
 				randnum <= randreg & mask; // my dumb ass typed this as "randname" and didn' know why it didn' work...
-			else
+			end else begin
 				randnum <= 32'd0;
 			end
 		end
@@ -144,7 +169,7 @@ endmodule
 	
 // Oh sweet lord above heaven and earth, please save me from what i'm about to do.
 // I'll actually write comments this time because this shit confuses tf outta me..
-module CLU                           (
+module clu                           (
 	input wire        clock,        // Clock
 	input wire        reset,        // Reset
 	input wire        interrupt,    // IRQ pin on the CPU must feed into this
@@ -285,7 +310,7 @@ module CLU                           (
 				end
 
 				S_WAIT: begin
-					if (lsu_op == 4'd8 && waitfordata) begin
+					if (lsu_op == 4'd8) begin
 						pc <= bus_c[23:0];
 					end
 				end
@@ -408,7 +433,6 @@ module CLU                           (
 								modulo = 1;
 							end else if (state == S_WAIT) begin
 								divide = 0;
-								modulo = 0;
 							end
 						end
 	

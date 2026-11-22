@@ -1,4 +1,4 @@
-﻿
+
 // This is the main arithmetic logic unit module...
 // I love how simple and straightforward it is. 
 // Such a contrast to the shit down below...
@@ -119,8 +119,8 @@ module divider				(
 	output reg [31:0] remainder,
 	output reg done			);
 
-	reg [63:0] curr_shiftreg;
-	reg [63:0] next_shiftreg;
+	reg [64:0] curr_shiftreg;
+	reg [64:0] next_shiftreg;
 	reg [31:0] saved_divisor;
 	reg [ 5:0] iterationum;
 	reg        busy;
@@ -129,8 +129,8 @@ module divider				(
 	always @(*) begin
 		next_shiftreg = curr_shiftreg << 1;
 
-		if (next_shiftreg[63:32] >= saved_divisor) begin
-			next_shiftreg[63:32] = next_shiftreg[63:32] - saved_divisor;
+		if (next_shiftreg[64:32] >= saved_divisor) begin
+			next_shiftreg[64:32] = next_shiftreg[64:32] - saved_divisor;
 			next_shiftreg[0]     = 1'b1; // I think this is the quotient
 		end
 	end
