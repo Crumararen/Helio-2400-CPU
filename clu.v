@@ -326,7 +326,6 @@ module clu                           (
 						4'h3: begin // POP
 							reg_waddr = operb;
 							busmuxsel = 4'd3;
-							reg_write  = 1;
 							lsu_op    = 4'd6;
 						end
 	
@@ -530,7 +529,6 @@ module clu                           (
 					reg_opera = operb;
 					reg_waddr = opera;
 					busmuxsel = 4'd3;
-					reg_write = 1;
 					lsu_op    = memflag ? 4'd3 : 4'd1;
 				end
 	
@@ -552,7 +550,6 @@ module clu                           (
 					reg_opera = opera;
 					reg_waddr = operb;
 					busmuxsel = 4'd3;
-					reg_write = 1;
 					lsu_op    = 4'd10;
 				end
 	
