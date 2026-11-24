@@ -1,5 +1,6 @@
 
 // Yeah, guess what? I'm stupid. We can just do this.
+// This multiplexer will only go on bus C.
 // 0        : Register value
 // 1        : Bus A
 // 2 16     : ALU result
@@ -326,6 +327,7 @@ module clu                           (
 						4'h3: begin // POP
 							reg_waddr = operb;
 							busmuxsel = 4'd3;
+							regwrite  = 1;
 							lsu_op    = 4'd6;
 						end
 	
@@ -526,30 +528,33 @@ module clu                           (
 				end
 	
 				4'hC: begin // LOAD
-					reg_opera = operb;
+					reg_operc = operb;
 					reg_waddr = opera;
-					busmuxsel = 4'd3;
+					busmuxsel = 4'd0;
+					regwrite  = 1;
 					lsu_op    = memflag ? 4'd3 : 4'd1;
 				end
 	
 				4'hD: begin // STORE
-					reg_opera = opera;
+					reg_operc = opera;
 					reg_operb = operb;
+					busmuxsel = 4'd0;
 					lsu_op    = memflag ? 4'd4 : 4'd2;
 				end
 	
 				4'hE: begin // WCHR
-					reg_opera = opera;   // Address in first operand
-					reg_operb = operb;   // Palette data in second operand
-					reg_operc = operc;   // Character in first
+					reg_operc = opera;   // Address in first operand
+					reg_opera = operb;   // Palette data in second operand
+					reg_operb = operc;   // Character in first
 					busmuxsel = 4'd0;
 					lsu_op    = 4'd9;
 				end
 	
 				4'hF: begin // RCHR
-					reg_opera = opera;
+					reg_operc = opera;
 					reg_waddr = operb;
-					busmuxsel = 4'd3;
+					busmuxsel = 4'd0;
+					regwrite  = 1;
 					lsu_op    = 4'd10;
 				end
 	
@@ -576,7 +581,7 @@ module clu                           (
 
 		if (state == S_EXECUTE && lsu_op != 0)
 			lsu_start = 1;
-		if (state == S_WAIT && lsu_op == 4'd8 && lsu_done)
+		if (state == S_WAIT && (lsu_op != 4'd0 && lsu_done)
 			busmuxsel = 4'd3;
 		if (state == S_WAIT && opcode == 4'hB) begin
 			busmuxsel = 4'd7;

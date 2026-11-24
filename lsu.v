@@ -12,11 +12,12 @@ module lsu	                       (   // do not trust me on that.
 	input      [ 7:0] auxdata_in,      // Bottom 8 bits from data bus 2 so we can fetch two separate bytes at once for WCHR.
 	input      [ 3:0] regaddr_in,      // Register address in, for pop, load
 	input      [ 3:0] lsu_op,          // Load-store unit operation code; push, pop, call, ret, load, store
+	input      [ 2:0] stackconfig,     // Stack configuration
+	input      [23:0] stackoffset,     // First memory address in the STACK
 	output reg [23:0] memaddr_out,     // Memory address out, for push, pop, call, ret, load, store
 	output reg [31:0] intdata_out,     // Internal databus, for transferring data between registers
 	output reg [15:0] outdata_out,     // External databus, for push, call, store operations
 	output reg [ 3:0] regaddr_out,     // Register address out for regwrite, pop, load instructions
-	output reg [ 1:0] stackpnt_op,  // 00 == do nothing, 01 == advance downward by 1, 10 == decrement upward by 1. it's so ugly TvT
 	output reg        regwrite,        // Raise high to tell the register file to write to address 
 	output reg        writeword,       // Goes direct to the FULLWORD pin on the CPU, for the memory controller's reference
 	output reg        mem_write,       // Tell the memory controller to write
@@ -55,7 +56,11 @@ module lsu	                       (   // do not trust me on that.
 	reg [ 3:0] destlatch;          // Protect destination 1 
 	reg [ 3:0] des2latch;          // Protect destination 2
 	reg [31:0] restlatch;          // Protect result
-	
+	reg [11:0] sp;                 // Stack pointer
+	reg [ 1:0] stackpnt_op,        // 00 == do nothing, 01 == advance downward by 1, 10 == decrement upward by 1.
+	wire [12:0] effectivesp = stackconfig[2] ? {sp, 1'b0} : {1'b0, sp}; // If the highest bit of stackconfig is high, stack is byte addressed.
+	// By shifting the value of the stackpointer left by 1, we double its value, giving us the byte address instead of the word address.
+
 	// This is the state machine.. It tracks all our multicycle instructions so we know what to do on each clock cycle.
 	always @(posedge clock or posedge reset) begin // You are correct, this is probably convoluted, but, i mean... fuck it.
 		if (reset) begin                       // You try to teach yourself how to do this shit in a week man.
@@ -226,7 +231,7 @@ module lsu	                       (   // do not trust me on that.
 			LSU_STOR2: outdata_out = datalatch[15:0];
 			LSU_WCHR:  outdata_out = {datalatch[7:0], auxilatch[7:0]};
 			LSU_PUSH:  outdata_out = half_select ? datalatch[15:0] : datalatch[31:16];
-			LSU_CALL:  outdata_out = half_select ? datalatch[15:0] : {8'h00, datalatch[23:16]};
+			LSU_CALL:  outdata_out = half_select ? addrlatch[15:0] : {8'h00, addrlatch[23:16]};
 			default:   outdata_out = 16'h0000;
 		endcase
 
